@@ -1,0 +1,35 @@
+spec:
+  containers:
+    - name: bootstrap
+      image: ${SPCS_IMAGE:-/db/schema/repo/superset-spcs:latest}
+      command:
+        - bash
+        - /app/scripts/spcs_bootstrap.sh
+      env:
+        - name: SUPERSET_CONFIG_PATH
+          value: /config/superset_config.py
+      secrets:
+        - snowflakeSecret: ${SECRET_SUPERSET_DB_URI}
+          secretKeyRef: secret_string
+          envVarName: SUPERSET_DB_URI
+        - snowflakeSecret: ${SECRET_SUPERSET_SECRET_KEY}
+          secretKeyRef: secret_string
+          envVarName: SUPERSET_SECRET_KEY
+        - snowflakeSecret: ${SECRET_SUPERSET_FERNET_KEY}
+          secretKeyRef: secret_string
+          envVarName: SUPERSET_FERNET_KEY
+        - snowflakeSecret: ${SECRET_SUPERSET_ADMINS}
+          secretKeyRef: secret_string
+          envVarName: SUPERSET_BOOTSTRAP_ADMINS
+      volumeMounts:
+        - name: superset-config
+          mountPath: /config
+      resources:
+        requests:
+          cpu: "1"
+          memory: 4Gi
+  volumes:
+    - name: superset-config
+      source: stage
+      stageConfig:
+        name: ${CONFIG_STAGE:-@app_config.superset}

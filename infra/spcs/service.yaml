@@ -1,0 +1,43 @@
+spec:
+  containers:
+    - name: superset
+      image: ${SPCS_IMAGE:-/db/schema/repo/superset-spcs:latest}
+      command:
+        - bash
+        - -lc
+        - |
+          superset db upgrade && superset init && \ 
+          gunicorn --bind 0.0.0.0:8088 --workers ${GUNICORN_WORKERS:-4} "superset.app:create_app()"
+      env:
+        - name: SUPERSET_CONFIG_PATH
+          value: /config/superset_config.py
+        - name: SUPERSET_DB_URI
+          valueFrom:
+            secretRef:
+              name: superset_meta_pg
+              key: uri
+      volumeMounts:
+        - name: superset-config
+          mountPath: /config
+      resources:
+        requests:
+          cpu: "1"
+          memory: 4Gi
+        limits:
+          cpu: "2"
+          memory: 8Gi
+  endpoints:
+    - name: ui
+      port: 8088
+      public: true
+  externalAccess:
+    integrations:
+      - ${PG_EAI_NAME:-pg_meta_eai}
+  capabilities:
+    securityContext:
+      executeAsCaller: true
+  volumes:
+    - name: superset-config
+      source: stage
+      stageConfig:
+        name: ${CONFIG_STAGE:-@app_config.superset}

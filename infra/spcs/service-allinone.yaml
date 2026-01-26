@@ -1,0 +1,79 @@
+spec:
+  containers:
+    - name: superset
+      image: ${SPCS_IMAGE}
+      env:
+        - name: SUPERSET_CONFIG_PATH
+          value: /config/superset_config.py
+        - name: SUPERSET_DB_URI
+          value: postgresql+psycopg2://superset:superset@postgres:5432/superset
+        - name: SUPERSET_REDIS_HOST
+          value: redis
+        - name: SUPERSET_REDIS_PORT
+          value: "6379"
+      secrets:
+        - snowflakeSecret: ${SECRET_SUPERSET_SECRET_KEY}
+          secretKeyRef: secret_string
+          envVarName: SUPERSET_SECRET_KEY
+        - snowflakeSecret: ${SECRET_SUPERSET_FERNET_KEY}
+          secretKeyRef: secret_string
+          envVarName: SUPERSET_FERNET_KEY
+      volumeMounts:
+        - name: superset-config
+          mountPath: /config
+      resources:
+        requests:
+          cpu: "1"
+          memory: 4Gi
+        limits:
+          cpu: "2"
+          memory: 8Gi
+
+    - name: postgres
+      image: ${SPCS_POSTGRES_IMAGE}
+      env:
+        - name: POSTGRES_DB
+          value: superset
+        - name: POSTGRES_USER
+          value: superset
+        - name: POSTGRES_PASSWORD
+          value: superset
+      volumeMounts:
+        - name: pgdata
+          mountPath: /var/lib/postgresql/data
+      resources:
+        requests:
+          cpu: "0.5"
+          memory: 1Gi
+        limits:
+          cpu: "2"
+          memory: 4Gi
+
+    - name: redis
+      image: ${SPCS_REDIS_IMAGE}
+      command: ["redis-server","--save","","--appendonly","no"]
+      resources:
+        requests:
+          cpu: "0.25"
+          memory: 256Mi
+        limits:
+          cpu: "1"
+          memory: 1Gi
+
+  endpoints:
+    - name: ui
+      port: 8088
+      public: true
+
+  capabilities:
+    securityContext:
+      executeAsCaller: true
+
+  volumes:
+    - name: superset-config
+      source: stage
+      stageConfig:
+        name: ${CONFIG_STAGE}
+    - name: pgdata
+      source: block
+      size: 50Gi

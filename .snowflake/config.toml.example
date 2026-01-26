@@ -1,0 +1,16 @@
+# Copy to .snowflake/config.toml and fill in values.
+# This file is intentionally not committed by default (see .gitignore).
+#
+# Docs: https://docs.snowflake.com/en/developer-guide/snowflake-cli-v2/configure
+
+default_connection_name = "spcs-dev"
+
+[connections.spcs-dev]
+account = "YOUR_ACCOUNT_LOCATOR"
+user = "YOUR_USER"
+# Prefer externalbrowser for interactive local login.
+authenticator = "externalbrowser"
+role = "SYSADMIN"
+warehouse = "YOUR_WAREHOUSE"
+database = "YOUR_DB"
+schema = "YOUR_SCHEMA"
