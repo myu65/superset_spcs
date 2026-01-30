@@ -13,6 +13,14 @@ SERVICE_SPEC=${SERVICE_SPEC:-}
 BOOTSTRAP_SPEC=${BOOTSTRAP_SPEC:-$ROOT_DIR/infra/spcs/jobs/bootstrap_admin.yaml}
 SNOW_CONNECTION=${SNOW_CONNECTION:-}
 
+# Enable Snowflake CLI debug output when `--debug` is present anywhere in args.
+for arg in "$@"; do
+  if [[ "$arg" == "--debug" ]]; then
+    export SNOW_DEBUG=1
+    break
+  fi
+done
+
 load_repo_env() {
   # Source a repo-local env file for naming, stages, and connection selection.
   # This makes `./cli/spcs.sh deploy` reproducible without exporting many vars.
@@ -23,6 +31,7 @@ load_repo_env() {
     source "$env_file"
     set +a
   fi
+  normalize_stage_env
 }
 
 pick_service_spec() {
@@ -40,6 +49,40 @@ pick_service_spec() {
 
 log() {
   echo "[spcs] $*"
+}
+
+stage_ref() {
+  # Ensure a stage reference is prefixed with '@' (used for copy/mount paths).
+  local s=${1:-}
+  if [[ -z "$s" ]]; then
+    echo ""
+    return 0
+  fi
+  if [[ "$s" == @* ]]; then
+    echo "$s"
+    return 0
+  fi
+  echo "@$s"
+}
+
+stage_object_name() {
+  # Convert a stage reference like "@DB.SCHEMA.STAGE/path" to "DB.SCHEMA.STAGE"
+  # (used for CREATE STAGE / snow stage create).
+  local s=${1:-}
+  s="${s#@}"
+  s="${s%%/*}"
+  echo "$s"
+}
+
+normalize_stage_env() {
+  # Allow CONFIG_STAGE/ARTIFACT_STAGE to be specified with or without '@'.
+  # Specs/mounts generally want '@', but stage creation rejects it.
+  if [[ -n "${CONFIG_STAGE:-}" ]]; then
+    CONFIG_STAGE="$(stage_ref "$CONFIG_STAGE")"
+  fi
+  if [[ -n "${ARTIFACT_STAGE:-}" ]]; then
+    ARTIFACT_STAGE="$(stage_ref "$ARTIFACT_STAGE")"
+  fi
 }
 
 maybe_fix_repo_local_snowflake_perms() {
@@ -74,24 +117,47 @@ snow_exec() {
     snowflake_home="$ROOT_DIR/.snowflake"
   fi
 
+  local -a snow_global=()
+  if [[ "${SNOW_DEBUG:-0}" == "1" ]]; then
+    snow_global+=(--debug)
+  fi
+
   local -a env_prefix=()
   if [[ -n "$snowflake_home" ]]; then
     maybe_fix_repo_local_snowflake_perms "$snowflake_home"
     env_prefix=(env "SNOWFLAKE_HOME=$snowflake_home")
   fi
 
+  # Make uv/uvx usable in restricted environments by keeping caches inside the repo.
+  local uv_cache_dir="${UV_CACHE_DIR:-$ROOT_DIR/.uv-cache}"
+  local xdg_data_home="${XDG_DATA_HOME:-$ROOT_DIR/.xdg-data}"
+  local xdg_cache_home="${XDG_CACHE_HOME:-$ROOT_DIR/.xdg-cache}"
+  env_prefix+=(env "UV_CACHE_DIR=$uv_cache_dir" "XDG_DATA_HOME=$xdg_data_home" "XDG_CACHE_HOME=$xdg_cache_home")
+
+  # Prefer a repo-local venv snow (this also ensures we use the venv's Python, e.g. 3.11+).
+  if [[ -x "$ROOT_DIR/.venv/bin/snow" ]]; then
+    "${env_prefix[@]}" "$ROOT_DIR/.venv/bin/snow" "${snow_global[@]}" "$@"
+    return
+  fi
+
   if command -v snow >/dev/null 2>&1; then
-    "${env_prefix[@]}" snow "$@"
+    "${env_prefix[@]}" snow "${snow_global[@]}" "$@"
+    return
+  fi
+
+  # If a repo venv exists, use its interpreter for uvx so we can resolve newer snowflake-cli.
+  if [[ -x "$ROOT_DIR/.venv/bin/python" ]] && command -v uvx >/dev/null 2>&1; then
+    "${env_prefix[@]}" uvx -p "$ROOT_DIR/.venv/bin/python" --from snowflake-cli snow "${snow_global[@]}" "$@"
     return
   fi
 
   if command -v uvx >/dev/null 2>&1; then
-    "${env_prefix[@]}" uvx --from snowflake-cli snow "$@"
+    "${env_prefix[@]}" uvx --from snowflake-cli snow "${snow_global[@]}" "$@"
     return
   fi
 
   if command -v uv >/dev/null 2>&1; then
-    "${env_prefix[@]}" uv tool run --from snowflake-cli snow "$@"
+    "${env_prefix[@]}" uv tool run --from snowflake-cli snow "${snow_global[@]}" "$@"
     return
   fi
 
@@ -140,9 +206,11 @@ sync_config_stage() {
   fi
   # Snowflake CLI v2 uses `snow stage copy` (not `put`) for upload/download.
   # Use no-auto-compress to keep filenames intact so SPCS stage mounts can import .py files directly.
-  local dest="${CONFIG_STAGE%/}/"
+  local dest
+  dest="$(stage_ref "$CONFIG_STAGE")"
+  dest="${dest%/}/"
   log "Uploading superset/config/ to stage $dest"
-  snow_exec stage create "${conn[@]}" "${CONFIG_STAGE}" >/dev/null 2>&1 || true
+  snow_exec stage create "${conn[@]}" "$(stage_object_name "$CONFIG_STAGE")" >/dev/null 2>&1 || true
   # `snow stage copy` does not support recursive uploads; copy files one by one.
   shopt -s nullglob
   local file
@@ -164,17 +232,24 @@ apply_service_spec() {
   if [[ -n "$SNOW_CONNECTION" ]]; then
     conn+=(--connection "$SNOW_CONNECTION")
   fi
+  # Snowflake CLI v3 uses positional <name> and `--spec-path`.
+  # Create if missing, then upgrade to apply the rendered spec.
   snow_exec spcs service create "${conn[@]}" \
-    --name "$SERVICE_NAME" \
+    "$SERVICE_NAME" \
     --compute-pool "$COMPUTE_POOL" \
-    --spec-file "$rendered" \
-    --if-exists replace
+    --spec-path "$rendered" \
+    --if-not-exists
+  snow_exec spcs service upgrade "${conn[@]}" \
+    "$SERVICE_NAME" \
+    --spec-path "$rendered"
   rm -f "$rendered"
 }
 
 run_job_spec() {
   local spec=$1
   local job_name=${2:-${JOB_NAME:-superset-job}}
+  # Snowflake CLI validates names; hyphens are rejected. Keep this forgiving.
+  job_name="${job_name//-/_}"
   require_env COMPUTE_POOL
   local rendered
   rendered=$(render_to_tmp "$spec")
@@ -183,10 +258,11 @@ run_job_spec() {
   if [[ -n "$SNOW_CONNECTION" ]]; then
     conn+=(--connection "$SNOW_CONNECTION")
   fi
+  # Snowflake CLI v3 uses positional <name> and `--spec-path`.
   snow_exec spcs service execute-job "${conn[@]}" \
-    --name "$job_name" \
+    "$job_name" \
     --compute-pool "$COMPUTE_POOL" \
-    --spec-file "$rendered"
+    --spec-path "$rendered"
   rm -f "$rendered"
 }
 
@@ -198,11 +274,15 @@ deploy_all() {
   if [[ "${PUSH_IMAGE:-0}" == "1" ]]; then
     push_images
   else
-    maybe_push_image
+    if [[ -n "${IMAGE_PUSH_TARGET:-}" ]]; then
+      maybe_push_image
+    else
+      log "Skipping image push (set PUSH_IMAGE=1 to push to Snowflake image registry)"
+    fi
   fi
   sync_config_stage
   if [[ "${RUN_BOOTSTRAP:-0}" == "1" ]]; then
-    run_job_spec "$BOOTSTRAP_SPEC" "${BOOTSTRAP_JOB_NAME:-superset-bootstrap}"
+    run_job_spec "$BOOTSTRAP_SPEC" "${BOOTSTRAP_JOB_NAME:-superset_bootstrap}"
   fi
   apply_service_spec
   log "Deployment complete."
@@ -222,8 +302,8 @@ bootstrap_snowflake() {
   snow_exec sql "${conn[@]}" -q "CREATE SCHEMA IF NOT EXISTS ${APP_DB}.${APP_SCHEMA};"
 
   log "Ensuring stages exist: ${CONFIG_STAGE}, ${ARTIFACT_STAGE}"
-  snow_exec stage create "${conn[@]}" "${CONFIG_STAGE}"
-  snow_exec stage create "${conn[@]}" "${ARTIFACT_STAGE}"
+  snow_exec stage create "${conn[@]}" "$(stage_object_name "$CONFIG_STAGE")"
+  snow_exec stage create "${conn[@]}" "$(stage_object_name "$ARTIFACT_STAGE")"
 
   # `snow spcs image-repository create` creates in the current schema; pass db/schema explicitly.
   local repo_name="${IMAGE_REPO##*.}"
@@ -255,17 +335,121 @@ push_images() {
   snow_exec spcs image-registry login "${conn[@]}"
 
   local registry_url
-  registry_url="$(snow_exec spcs image-registry url "${conn[@]}" --format JSON | python3 -c 'import json,sys\n\ndef find_str(o):\n  if isinstance(o,str):\n    return o\n  if isinstance(o,dict):\n    for v in o.values():\n      s=find_str(v)\n      if s:\n        return s\n  if isinstance(o,list):\n    for v in o:\n      s=find_str(v)\n      if s:\n        return s\n  return None\n\ntry:\n  data=json.load(sys.stdin)\nexcept Exception:\n  sys.exit(1)\n\ns=find_str(data)\nif s:\n  sys.stdout.write(s)')"
+  log "Detecting Snowflake image registry URL"
 
-  if [[ -z "$registry_url" ]]; then
+  local registry_json
+  if ! registry_json="$(snow_exec spcs image-registry url "${conn[@]}" --format json 2>/dev/null || snow_exec spcs image-registry url "${conn[@]}")"; then
+    echo "Failed to fetch Snowflake image registry URL (snow spcs image-registry url)." >&2
+    exit 1
+  fi
+
+  if ! registry_url="$(
+    REGISTRY_JSON="$registry_json" python3 - <<'PY'
+import json
+import os
+import re
+import sys
+
+raw = os.environ.get("REGISTRY_JSON", "")
+
+
+def collect_strings(obj, out):
+    if isinstance(obj, str):
+        out.append(obj)
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            collect_strings(v, out)
+    elif isinstance(obj, list):
+        for v in obj:
+            collect_strings(v, out)
+
+
+def pick_registry(strings):
+    # Prefer the canonical Snowflake registry hostname if present.
+    for s in strings:
+        if isinstance(s, str) and "registry.snowflakecomputing.com" in s:
+            return s.strip().rstrip("/")
+
+    # Otherwise, pick the "most registry-like" string.
+    candidates = []
+    for s in strings:
+        if not isinstance(s, str):
+            continue
+        s = s.strip()
+        if not s:
+            continue
+        if " " in s:
+            continue
+        if "." not in s:
+            continue
+        lower = s.lower()
+        score = 0
+        if "registry" in lower:
+            score += 10
+        if "snowflake" in lower:
+            score += 5
+        if lower.startswith("http://") or lower.startswith("https://"):
+            score += 2
+        candidates.append((score, len(s), s))
+    if not candidates:
+        return None
+    candidates.sort(reverse=True)
+    return candidates[0][2].rstrip("/")
+
+
+def fallback_from_text(text):
+    patterns = [
+        r"[A-Za-z0-9][A-Za-z0-9.-]*registry\\.snowflakecomputing\\.com",
+        r"https?://[^\\s\"']+",
+    ]
+    for pat in patterns:
+        m = re.search(pat, text)
+        if m:
+            return m.group(0).strip().rstrip("/")
+    return None
+
+
+strings = []
+try:
+    data = json.loads(raw)
+except Exception:
+    data = None
+
+url = None
+if data is not None:
+    collect_strings(data, strings)
+    url = pick_registry(strings)
+if not url:
+    url = fallback_from_text(raw)
+if not url:
+    sys.exit(3)
+
+sys.stdout.write(url)
+PY
+  )"; then
+    echo "Failed to detect Snowflake image registry URL from output." >&2
+    echo "Raw output:" >&2
+    echo "$registry_json" >&2
+    exit 1
+  fi
+
+  # Sanitize for docker (strip scheme, whitespace, CRLF, trailing slashes).
+  registry_url="$(printf '%s' "$registry_url" | tr -d '\r\n' | sed -e 's#^https\\?://##' -e 's#^[[:space:]]*##' -e 's#[[:space:]]*$##' -e 's#/*$##')"
+  if [[ -z "$registry_url" ]] || [[ "$registry_url" == /* ]]; then
     echo "Failed to detect Snowflake image registry URL." >&2
+    echo "Raw output:" >&2
+    echo "$registry_json" >&2
     exit 1
   fi
 
   push_one() {
     local spcs_path=$1
     local source_image=${2:-$IMAGE_NAME}
-    local target="${registry_url}/${spcs_path#/}"
+    # Docker enforces lowercase repository names. Snowflake object identifiers are case-insensitive,
+    # so push using a lowercase path.
+    local repo_path="${spcs_path#/}"
+    repo_path="${repo_path,,}"
+    local target="${registry_url}/${repo_path}"
     log "Pushing $source_image -> $target"
     docker tag "$source_image" "$target"
     docker push "$target"
