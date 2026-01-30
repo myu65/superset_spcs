@@ -191,3 +191,47 @@ Snowflake CLI (`snow`) は、手元に `snow` バイナリが無い場合でも 
 - どの構成を適用するか (`SPCS_PROFILE=managed` or `allinone`)
 
 これを埋めたら基本は `./cli/spcs.sh deploy` で進められます。
+
+## Superset から Snowflake に接続する (SPCS 内から)
+
+Superset が SPCS 上で動いている場合、Superset から Snowflake (および外部サービス) に接続するには **External Access Integration (EAI)** が必要です。
+EAI が未設定だと Superset の「Database 接続テスト」で `Network policy is required` のようなエラーになります。
+
+### 権限について（重要）
+
+Network Rule / External Access Integration は **アカウントレベルのオブジェクト**です。
+作成には通常 `ACCOUNTADMIN`（またはセキュリティ管理者が持つ `CREATE NETWORK RULE` / `CREATE INTEGRATION` 相当の権限）が必要になります。
+手元の `SYSADMIN` などで作れない場合は、管理者に一度だけ作ってもらう運用にしてください。
+
+### 1) Snowflake 側で Network Rule + EAI を作る（管理者向け）
+
+下記は「まず通す」ための例です（HTTPS 443）。本番では *必要なホスト* に絞ってください。
+ホストは Superset のエラーに出る `...snowflakecomputing.com:443` をそのまま入れるのが確実です。
+
+```
+-- 実行ロール例: ACCOUNTADMIN / SECURITYADMIN（要権限）
+USE ROLE SECURITYADMIN;
+
+CREATE OR REPLACE NETWORK RULE sf_api_rule
+  MODE = EGRESS
+  TYPE = HOST_PORT
+  VALUE_LIST = ('<YOUR_ACCOUNT_LOCATOR>.<region>.<cloud>.snowflakecomputing.com:443');
+
+CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION sf_api_eai
+  ALLOWED_NETWORK_RULES = (sf_api_rule)
+  ENABLED = TRUE;
+
+-- SPCS service を作るロール（例: SYSADMIN）に利用権を付与
+GRANT USAGE ON INTEGRATION sf_api_eai TO ROLE SYSADMIN;
+```
+
+### 2) サービス spec に EAI を attach する
+
+`config/spcs.env` に EAI 名を設定して service を更新します:
+
+```
+SF_EAI_NAME=sf_api_eai
+./cli/spcs.sh apply-service
+```
+
+このリポの CLI は `SF_EAI_NAME` が設定されている場合、allinone では `infra/spcs/service-allinone-eai.yaml` を自動で選びます。
