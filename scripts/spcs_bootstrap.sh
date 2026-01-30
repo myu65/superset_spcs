@@ -5,6 +5,15 @@ log() {
   echo "[bootstrap] $*"
 }
 
+require_env() {
+  local name=$1
+  local value="${!name:-}"
+  if [[ -z "$value" ]]; then
+    log "Missing required env var: ${name}"
+    exit 1
+  fi
+}
+
 bootstrap_admins() {
   local users_string="${SUPERSET_BOOTSTRAP_ADMINS:-}"
   if [[ -z "$users_string" ]]; then
@@ -26,6 +35,9 @@ bootstrap_admins() {
       || log "create-admin exited non-zero (possibly already exists) for ${username}"
   done
 }
+
+require_env SUPERSET_DB_URI
+require_env SUPERSET_SECRET_KEY
 
 log "Running superset db upgrade"
 superset db upgrade

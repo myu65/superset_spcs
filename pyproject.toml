@@ -15,8 +15,11 @@ dev = [
     "snowflake-cli>=3.0",
 ]
 
-[tool.uv]
-dev-dependencies = ["pytest>=7.4", "snowflake-cli>=3.0"]
+[dependency-groups]
+dev = [
+    "pytest>=7.4",
+    "snowflake-cli>=3.0",
+]
 
 [tool.pytest.ini_options]
 pythonpath = [

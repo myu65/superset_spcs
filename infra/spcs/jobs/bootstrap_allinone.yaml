@@ -1,5 +1,30 @@
 spec:
   containers:
+    - name: postgres
+      image: ${SPCS_POSTGRES_IMAGE}
+      env:
+        POSTGRES_DB: superset
+        POSTGRES_USER: superset
+        POSTGRES_PASSWORD: superset
+      resources:
+        requests:
+          cpu: "0.25"
+          memory: 1Gi
+        limits:
+          cpu: "0.5"
+          memory: 2Gi
+
+    - name: redis
+      image: ${SPCS_REDIS_IMAGE}
+      command: ["redis-server","--save","","--appendonly","no"]
+      resources:
+        requests:
+          cpu: "0.25"
+          memory: 256Mi
+        limits:
+          cpu: "1"
+          memory: 1Gi
+
     - name: bootstrap
       image: ${SPCS_IMAGE}
       command:
@@ -7,10 +32,10 @@ spec:
         - /app/scripts/spcs_bootstrap.sh
       env:
         SUPERSET_CONFIG_PATH: /config/superset_config.py
+        SUPERSET_DB_URI: "postgresql+psycopg2://superset:superset@postgres:5432/superset"
+        SUPERSET_REDIS_HOST: redis
+        SUPERSET_REDIS_PORT: "6379"
       secrets:
-        - snowflakeSecret: ${SECRET_SUPERSET_DB_URI}
-          secretKeyRef: secret_string
-          envVarName: SUPERSET_DB_URI
         - snowflakeSecret: ${SECRET_SUPERSET_SECRET_KEY}
           secretKeyRef: secret_string
           envVarName: SUPERSET_SECRET_KEY
@@ -25,8 +50,9 @@ spec:
           mountPath: /config
       resources:
         requests:
-          cpu: "1"
-          memory: 4Gi
+          cpu: "0.5"
+          memory: 2Gi
+
   volumes:
     - name: superset-config
       source: stage

@@ -1,7 +1,7 @@
 spec:
   containers:
     - name: restore
-      image: ${POSTGRES_IMAGE:-ghcr.io/snowflake-labs/postgres-client:16}
+      image: ghcr.io/snowflake-labs/postgres-client:16
       command:
         - bash
         - -lc
@@ -16,7 +16,7 @@ spec:
         - name: dump
           mountPath: /stage
       env:
-        - name: SUPERSET_DB_URI
+        SUPERSET_DB_URI:
           valueFrom:
             secretRef:
               name: superset_meta_pg
@@ -25,4 +25,4 @@ spec:
     - name: dump
       source: stage
       stageConfig:
-        name: ${DUMP_STAGE:-@app_artifacts.superset_dump}
+        name: "${DUMP_STAGE}"

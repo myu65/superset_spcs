@@ -66,16 +66,26 @@ Run `./cli/spcs.sh deploy` to execute the whole pipeline in one go (it will sour
 Configuration is expected to live in `config/spcs.env` (copy from `config/spcs.env.example`).
 
 Note: `bootstrap-snowflake` does not create secrets (they must contain values), compute pools, or EAI/network rules.
+Tip: `./cli/spcs.sh create-secrets` can create/replace the required Superset secrets (and can auto-generate `SECRET_KEY`/`FERNET_KEY`). Configure these in `config/spcs.env` (or pass them inline):
+
+- `SUPERSET_DB_URI_VALUE` — SQLAlchemy DB URI (required for `managed`; optional for `allinone`)
+- `SUPERSET_SECRET_KEY_VALUE`
+- `SUPERSET_FERNET_KEY_VALUE`
+- `SUPERSET_ADMINS_VALUE` — comma-separated usernames
+For convenience, `create-secrets` will also fall back to repo-local `.env` keys (`PG_CON`, `SECRET_KEY`, `FERNET_KEY`) if present.
+If you hit `Service <JOB_NAME> already exists` when re-running jobs, set `JOB_NAME_UNIQUE=1` to suffix job names with a timestamp.
 
 ### Commands
 
 The CLI includes:
 
 - `./cli/spcs.sh bootstrap-snowflake` — create DB/SCHEMA, stages, and the image repository if missing
+- `./cli/spcs.sh create-secrets` — create/replace required Superset secrets in Snowflake
 - `./cli/spcs.sh push-images` — login to Snowflake image registry and push images (Superset + optional deps)
 - `./cli/spcs.sh sync-config-stage`
 - `./cli/spcs.sh apply-service`
 - `./cli/spcs.sh run-job infra/spcs/jobs/pg_restore.yaml superset-restore`
+- `infra/spcs/jobs/bootstrap_allinone.yaml` — allinone bootstrap job (runs Superset+Postgres+Redis in one job)
 
 All SPCS commands require Snowflake CLI (`snow`). If `snow` isn't installed, the CLI will try to run it via uv (`uvx --from snowflake-cli snow ...`).
 
@@ -99,6 +109,7 @@ This is where you define:
 - DB/schema names
 - stage names for config/assets
 - secret names
+- (optional) secret values used by `create-secrets`: `SUPERSET_DB_URI_VALUE`, `SUPERSET_SECRET_KEY_VALUE`, `SUPERSET_FERNET_KEY_VALUE`, `SUPERSET_ADMINS_VALUE`
 - image repository + image reference
 - compute pool and service name
 
@@ -113,7 +124,7 @@ By default, `deploy` runs `bootstrap-snowflake` first (controlled by `AUTO_BOOTS
 3. `./cli/spcs.sh deploy`（必要なものの best-effort 作成 → イメージbuild → (任意) push → configアップロード → (任意) bootstrap job → service適用）。
 4. ローカル検証は `docker compose up --build` が簡単です（Superset + Postgres + Redis をまとめて起動）。
 
-※ `bootstrap-snowflake` は DB/SCHEMA/ステージ/image repository までの best-effort 作成です。Secret（値が必要）、compute pool、EAI/network rule は別途用意が必要です。
+※ `bootstrap-snowflake` は DB/SCHEMA/ステージ/image repository までの best-effort 作成です。Secret（値が必要）、compute pool、EAI/network rule は別途用意が必要です。Secret は `./cli/spcs.sh create-secrets` でまとめて作れます（`config/spcs.env.example` に例あり）。
 
 ### デプロイをワンコマンドで実行する
 
@@ -131,6 +142,7 @@ By default, `deploy` runs `bootstrap-snowflake` first (controlled by `AUTO_BOOTS
 - `APP_DB` / `APP_SCHEMA`
 - `CONFIG_STAGE` / `ARTIFACT_STAGE`
 - `SECRET_SUPERSET_*`（DB URI / SECRET_KEY / FERNET_KEY / 管理者リスト）
+- （任意）Secret に入れる値（`create-secrets` 用）: `SUPERSET_DB_URI_VALUE`, `SUPERSET_SECRET_KEY_VALUE`, `SUPERSET_FERNET_KEY_VALUE`, `SUPERSET_ADMINS_VALUE`
 - `IMAGE_REPO` / `SPCS_IMAGE`（必要なら `SPCS_REDIS_IMAGE` / `SPCS_POSTGRES_IMAGE`）
 - `COMPUTE_POOL` / `SERVICE_NAME`
 - `SPCS_PROFILE`（`managed` or `allinone`）
@@ -138,6 +150,7 @@ By default, `deploy` runs `bootstrap-snowflake` first (controlled by `AUTO_BOOTS
 
 補助コマンド:
 
+- `./cli/spcs.sh create-secrets` — Superset が必要とする Snowflake Secret をまとめて作成/更新（値は表示しません）
 - `./cli/spcs.sh sync-config-stage` — 設定ファイルだけアップロード
 - `./cli/spcs.sh apply-service` — サービス定義だけ適用
 - `./cli/spcs.sh run-job <spec> [job名]` — どの Job spec でも Snowflake CLI 経由で実行
@@ -171,6 +184,7 @@ Snowflake CLI (`snow`) は、手元に `snow` バイナリが無い場合でも 
 - Snowflake側の DB/SCHEMA 名 (`APP_DB`, `APP_SCHEMA`)
 - ステージ名 (`CONFIG_STAGE`, `ARTIFACT_STAGE`)
 - Secret名（`SECRET_SUPERSET_DB_URI`, `SECRET_SUPERSET_SECRET_KEY`, `SECRET_SUPERSET_FERNET_KEY`, `SECRET_SUPERSET_ADMINS`）
+- （任意）Secret に入れる値（`create-secrets` 用）: `SUPERSET_DB_URI_VALUE`, `SUPERSET_SECRET_KEY_VALUE`, `SUPERSET_FERNET_KEY_VALUE`, `SUPERSET_ADMINS_VALUE`
 - Image Repository 名と、SPCS spec で参照するイメージパス (`IMAGE_REPO`, `SPCS_IMAGE`)
 - compute pool / service 名 (`COMPUTE_POOL`, `SERVICE_NAME`)
 - どの構成を適用するか (`SPCS_PROFILE=managed` or `allinone`)

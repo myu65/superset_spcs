@@ -10,7 +10,7 @@ POSTGRES_URI=${SUPERSET_DB_URI:-postgresql://superset:superset@localhost:5432/su
 CONFIG_STAGE=${CONFIG_STAGE:-@app_config.superset}
 SPCS_PROFILE=${SPCS_PROFILE:-managed}
 SERVICE_SPEC=${SERVICE_SPEC:-}
-BOOTSTRAP_SPEC=${BOOTSTRAP_SPEC:-$ROOT_DIR/infra/spcs/jobs/bootstrap_admin.yaml}
+BOOTSTRAP_SPEC=${BOOTSTRAP_SPEC:-}
 SNOW_CONNECTION=${SNOW_CONNECTION:-}
 
 # Enable Snowflake CLI debug output when `--debug` is present anywhere in args.
@@ -47,8 +47,34 @@ pick_service_spec() {
   esac
 }
 
+pick_bootstrap_spec() {
+  if [[ -n "${BOOTSTRAP_SPEC:-}" ]]; then
+    echo "$BOOTSTRAP_SPEC"
+    return
+  fi
+
+  case "${SPCS_PROFILE}" in
+    allinone) echo "$ROOT_DIR/infra/spcs/jobs/bootstrap_allinone.yaml" ;;
+    managed) echo "$ROOT_DIR/infra/spcs/jobs/bootstrap_admin.yaml" ;;
+    *) echo "$ROOT_DIR/infra/spcs/jobs/bootstrap_admin.yaml" ;;
+  esac
+}
+
 log() {
   echo "[spcs] $*"
+}
+
+validate_identifier() {
+  local name=$1
+  local value=$2
+  if [[ -z "$value" ]]; then
+    echo "$name must be set." >&2
+    exit 1
+  fi
+  if [[ ! "$value" =~ ^[A-Za-z0-9_]+$ ]]; then
+    echo "$name must match ^[A-Za-z0-9_]+$ (got: $value)" >&2
+    exit 1
+  fi
 }
 
 stage_ref() {
@@ -83,6 +109,38 @@ normalize_stage_env() {
   if [[ -n "${ARTIFACT_STAGE:-}" ]]; then
     ARTIFACT_STAGE="$(stage_ref "$ARTIFACT_STAGE")"
   fi
+}
+
+ensure_compute_pool() {
+  # Compute pool creation is account-level and may require elevated privileges.
+  # Default behavior: fail-fast with an actionable message.
+  require_env COMPUTE_POOL
+  validate_identifier "COMPUTE_POOL" "$COMPUTE_POOL"
+
+  local -a conn=()
+  if [[ -n "$SNOW_CONNECTION" ]]; then
+    conn+=(--connection "$SNOW_CONNECTION")
+  fi
+
+  # `DESCRIBE COMPUTE POOL` fails if the pool doesn't exist or isn't authorized.
+  if snow_exec sql "${conn[@]}" -q "DESCRIBE COMPUTE POOL ${COMPUTE_POOL};" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if [[ "${AUTO_CREATE_COMPUTE_POOL:-0}" != "1" ]]; then
+    echo "[spcs] Compute pool '${COMPUTE_POOL}' does not exist or is not authorized." >&2
+    echo "[spcs] Create it (or grant access) then retry. Example SQL:" >&2
+    echo "CREATE COMPUTE POOL ${COMPUTE_POOL} MIN_NODES = 1 MAX_NODES = 1 INSTANCE_FAMILY = '<FILL_ME>'; " >&2
+    echo "[spcs] Or set AUTO_CREATE_COMPUTE_POOL=1 and configure COMPUTE_POOL_INSTANCE_FAMILY / MIN/MAX." >&2
+    exit 1
+  fi
+
+  require_env COMPUTE_POOL_INSTANCE_FAMILY COMPUTE_POOL_MIN_NODES COMPUTE_POOL_MAX_NODES
+  validate_identifier "COMPUTE_POOL_MIN_NODES" "$COMPUTE_POOL_MIN_NODES"
+  validate_identifier "COMPUTE_POOL_MAX_NODES" "$COMPUTE_POOL_MAX_NODES"
+
+  log "Creating compute pool ${COMPUTE_POOL} (MIN_NODES=${COMPUTE_POOL_MIN_NODES}, MAX_NODES=${COMPUTE_POOL_MAX_NODES}, INSTANCE_FAMILY=${COMPUTE_POOL_INSTANCE_FAMILY})"
+  snow_exec sql "${conn[@]}" -q "CREATE COMPUTE POOL IF NOT EXISTS ${COMPUTE_POOL} MIN_NODES = ${COMPUTE_POOL_MIN_NODES} MAX_NODES = ${COMPUTE_POOL_MAX_NODES} INSTANCE_FAMILY = '${COMPUTE_POOL_INSTANCE_FAMILY}';"
 }
 
 maybe_fix_repo_local_snowflake_perms() {
@@ -177,6 +235,143 @@ require_env() {
   done
 }
 
+sql_quote() {
+  # Print a safely single-quoted SQL string literal for stdin.
+  python3 - <<'PY'
+import sys
+
+s = sys.stdin.read()
+s = s.replace("'", "''")
+sys.stdout.write("'" + s + "'")
+PY
+}
+
+dotenv_get() {
+  # Read a KEY=VALUE entry from repo-local .env (used as a convenience fallback).
+  # This is intentionally minimal and only supports simple single-line assignments.
+  local key=$1
+  local env_file="${ROOT_DIR}/.env"
+  if [[ ! -f "$env_file" ]]; then
+    return 1
+  fi
+
+  awk -v k="$key" '
+    BEGIN { found=0 }
+    /^[[:space:]]*#/ { next }
+    /^[[:space:]]*$/ { next }
+    {
+      line=$0
+      sub(/^[[:space:]]*export[[:space:]]+/, "", line)
+      if (index(line, k "=") == 1) {
+        val=substr(line, length(k)+2)
+        sub(/[[:space:]]+$/, "", val)
+        print val
+        found=1
+        exit
+      }
+    }
+    END { if (!found) exit 1 }
+  ' "$env_file"
+}
+
+snow_connection_user() {
+  # Best-effort: read the "user" field for the selected connection from a TOML file.
+  # Supports:
+  #   - repo-local: $ROOT_DIR/.snowflake/config.toml
+  #   - global: ~/.snowflake/connections.toml
+  local conn_name="${SNOW_CONNECTION:-default}"
+  local cfg=""
+  if [[ -f "$ROOT_DIR/.snowflake/config.toml" ]]; then
+    cfg="$ROOT_DIR/.snowflake/config.toml"
+  elif [[ -f "$HOME/.snowflake/connections.toml" ]]; then
+    cfg="$HOME/.snowflake/connections.toml"
+  else
+    return 1
+  fi
+
+  awk -v section="connections.${conn_name}" '
+    $0 ~ "^\\[" section "\\]$" { in=1; next }
+    $0 ~ "^\\[" && in { exit }
+    in {
+      match($0, /user[[:space:]]*=[[:space:]]*\"([^\"]+)\"/, m)
+      if (m[1] != "") { print m[1]; exit }
+    }
+  ' "$cfg"
+}
+
+create_secret() {
+  local secret_name=$1
+  local secret_value=$2
+
+  if [[ -z "$secret_name" ]]; then
+    echo "Secret name must be set." >&2
+    exit 1
+  fi
+  if [[ -z "$secret_value" ]]; then
+    echo "Secret value for $secret_name must be set." >&2
+    exit 1
+  fi
+
+  local -a conn=()
+  if [[ -n "$SNOW_CONNECTION" ]]; then
+    conn+=(--connection "$SNOW_CONNECTION")
+  fi
+
+  local quoted
+  quoted="$(printf '%s' "$secret_value" | sql_quote)"
+  snow_exec sql "${conn[@]}" -q "CREATE OR REPLACE SECRET ${secret_name} TYPE=GENERIC_STRING SECRET_STRING=${quoted};"
+}
+
+create_secrets() {
+  require_env SECRET_SUPERSET_DB_URI SECRET_SUPERSET_SECRET_KEY SECRET_SUPERSET_FERNET_KEY SECRET_SUPERSET_ADMINS
+
+  local db_uri="${SUPERSET_DB_URI_VALUE:-${SUPERSET_DB_URI:-}}"
+  if [[ -z "$db_uri" ]]; then
+    db_uri="$(dotenv_get PG_CON 2>/dev/null || true)"
+  fi
+  if [[ "$db_uri" == postgres://* ]]; then
+    db_uri="postgresql+psycopg2://${db_uri#postgres://}"
+  fi
+  if [[ -z "$db_uri" ]] && [[ "${SPCS_PROFILE}" == "allinone" ]]; then
+    db_uri="postgresql+psycopg2://superset:superset@postgres:5432/superset"
+  fi
+  if [[ -z "$db_uri" ]]; then
+    echo "SUPERSET_DB_URI_VALUE (or SUPERSET_DB_URI) must be set to create ${SECRET_SUPERSET_DB_URI}." >&2
+    exit 1
+  fi
+
+  local secret_key="${SUPERSET_SECRET_KEY_VALUE:-${SUPERSET_SECRET_KEY:-}}"
+  if [[ -z "$secret_key" ]]; then
+    secret_key="$(dotenv_get SECRET_KEY 2>/dev/null || true)"
+  fi
+  if [[ -z "$secret_key" ]]; then
+    secret_key="$(python3 -c 'import secrets; print(secrets.token_urlsafe(64))')"
+  fi
+
+  local fernet_key="${SUPERSET_FERNET_KEY_VALUE:-${SUPERSET_FERNET_KEY:-}}"
+  if [[ -z "$fernet_key" ]]; then
+    fernet_key="$(dotenv_get FERNET_KEY 2>/dev/null || true)"
+  fi
+  if [[ -z "$fernet_key" ]]; then
+    fernet_key="$(python3 -c 'import os,base64; print(base64.urlsafe_b64encode(os.urandom(32)).decode())')"
+  fi
+
+  local admins="${SUPERSET_ADMINS_VALUE:-${SUPERSET_BOOTSTRAP_ADMINS:-${SUPERSET_ADMINS:-}}}"
+  if [[ -z "$admins" ]]; then
+    admins="$(snow_connection_user 2>/dev/null || true)"
+  fi
+  if [[ -z "$admins" ]]; then
+    admins="admin"
+  fi
+
+  log "Creating/updating Superset secrets in Snowflake (values are not printed)"
+  create_secret "$SECRET_SUPERSET_DB_URI" "$db_uri"
+  create_secret "$SECRET_SUPERSET_SECRET_KEY" "$secret_key"
+  create_secret "$SECRET_SUPERSET_FERNET_KEY" "$fernet_key"
+  create_secret "$SECRET_SUPERSET_ADMINS" "$admins"
+  log "Secrets created/updated."
+}
+
 render_to_tmp() {
   local file=$1
   require_cmd envsubst
@@ -222,7 +417,7 @@ sync_config_stage() {
 }
 
 apply_service_spec() {
-  require_env COMPUTE_POOL SERVICE_NAME
+  require_env COMPUTE_POOL SERVICE_NAME SPCS_IMAGE CONFIG_STAGE
   local spec_file
   spec_file="$(pick_service_spec)"
   local rendered
@@ -250,6 +445,10 @@ run_job_spec() {
   local job_name=${2:-${JOB_NAME:-superset-job}}
   # Snowflake CLI validates names; hyphens are rejected. Keep this forgiving.
   job_name="${job_name//-/_}"
+  if [[ "${JOB_NAME_UNIQUE:-0}" == "1" ]]; then
+    job_name="${job_name}_$(date -u +%Y%m%d_%H%M%S)"
+  fi
+  require_env SPCS_IMAGE CONFIG_STAGE
   require_env COMPUTE_POOL
   local rendered
   rendered=$(render_to_tmp "$spec")
@@ -259,10 +458,33 @@ run_job_spec() {
     conn+=(--connection "$SNOW_CONNECTION")
   fi
   # Snowflake CLI v3 uses positional <name> and `--spec-path`.
-  snow_exec spcs service execute-job "${conn[@]}" \
-    "$job_name" \
-    --compute-pool "$COMPUTE_POOL" \
-    --spec-path "$rendered"
+  local out
+  if ! out="$(
+    snow_exec spcs service execute-job "${conn[@]}" \
+      "$job_name" \
+      --compute-pool "$COMPUTE_POOL" \
+      --spec-path "$rendered" 2>&1
+  )"; then
+    # `execute-job` fails if a service with the same name exists (often from a prior failed run).
+    # Retry after dropping the job service via SQL (more stable than guessing CLI subcommands).
+    shopt -s nocasematch
+    if [[ "$out" == *"already exists"* ]]; then
+      log "Job service $job_name already exists; dropping and retrying"
+      snow_exec sql "${conn[@]}" -q "DROP SERVICE IF EXISTS ${job_name};"
+      snow_exec spcs service execute-job "${conn[@]}" \
+        "$job_name" \
+        --compute-pool "$COMPUTE_POOL" \
+        --spec-path "$rendered"
+    else
+      shopt -u nocasematch
+      echo "$out" >&2
+      rm -f "$rendered"
+      exit 1
+    fi
+    shopt -u nocasematch
+  else
+    echo "$out"
+  fi
   rm -f "$rendered"
 }
 
@@ -270,6 +492,7 @@ deploy_all() {
   if [[ "${AUTO_BOOTSTRAP_SNOWFLAKE:-1}" == "1" ]]; then
     bootstrap_snowflake
   fi
+  ensure_compute_pool
   build_image
   if [[ "${PUSH_IMAGE:-0}" == "1" ]]; then
     push_images
@@ -282,7 +505,7 @@ deploy_all() {
   fi
   sync_config_stage
   if [[ "${RUN_BOOTSTRAP:-0}" == "1" ]]; then
-    run_job_spec "$BOOTSTRAP_SPEC" "${BOOTSTRAP_JOB_NAME:-superset_bootstrap}"
+    run_job_spec "$(pick_bootstrap_spec)" "${BOOTSTRAP_JOB_NAME:-superset_bootstrap}"
   fi
   apply_service_spec
   log "Deployment complete."
@@ -319,6 +542,7 @@ Remaining prerequisites (usually manual):
   - ${SECRET_SUPERSET_SECRET_KEY} (GENERIC_STRING)
   - ${SECRET_SUPERSET_FERNET_KEY} (GENERIC_STRING)
   - ${SECRET_SUPERSET_ADMINS} (GENERIC_STRING: comma-separated usernames)
+  - Tip: `./cli/spcs.sh create-secrets` can create these (generates keys if missing).
 - Create/confirm compute pool: ${COMPUTE_POOL}
 - (managed profile) Create EAI/network rules if your managed Postgres hostname requires egress: ${PG_EAI_NAME}
 EOF
@@ -479,6 +703,7 @@ Commands:
   exec <cmd>              Run an arbitrary command inside the container
   render-spec <file>      Print an SPCS YAML spec with env substitution
   bootstrap-snowflake     Create DB/SCHEMA/stages/image repo if missing (best-effort)
+  create-secrets          Create/replace required Superset secrets in Snowflake
   push-images             Login to Snowflake image registry and push images (Superset + optional deps)
   sync-config-stage       Upload superset/config/* to the configured Snowflake stage
   apply-service           Render + apply infra/spcs/service.yaml via snow CLI
@@ -535,6 +760,9 @@ case "$cmd" in
     ;;
   bootstrap-snowflake)
     bootstrap_snowflake
+    ;;
+  create-secrets)
+    create_secrets
     ;;
   push-images)
     push_images
