@@ -48,10 +48,6 @@ spec:
     integrations:
       - ${PG_EAI_NAME}
 
-  capabilities:
-    securityContext:
-      executeAsCaller: true
-
   volumes:
     - name: superset-config
       source: stage

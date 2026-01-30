@@ -32,6 +32,7 @@ load_repo_env() {
     set +a
   fi
   normalize_stage_env
+  normalize_image_env
 }
 
 pick_service_spec() {
@@ -54,7 +55,6 @@ pick_bootstrap_spec() {
   fi
 
   case "${SPCS_PROFILE}" in
-    allinone) echo "$ROOT_DIR/infra/spcs/jobs/bootstrap_allinone.yaml" ;;
     managed) echo "$ROOT_DIR/infra/spcs/jobs/bootstrap_admin.yaml" ;;
     *) echo "$ROOT_DIR/infra/spcs/jobs/bootstrap_admin.yaml" ;;
   esac
@@ -108,6 +108,23 @@ normalize_stage_env() {
   fi
   if [[ -n "${ARTIFACT_STAGE:-}" ]]; then
     ARTIFACT_STAGE="$(stage_ref "$ARTIFACT_STAGE")"
+  fi
+}
+
+to_lower() {
+  tr '[:upper:]' '[:lower:]'
+}
+
+normalize_image_env() {
+  # Docker image references must be lowercase; Snowflake object names are case-insensitive unless quoted.
+  if [[ -n "${SPCS_IMAGE:-}" ]]; then
+    SPCS_IMAGE="$(printf '%s' "$SPCS_IMAGE" | to_lower)"
+  fi
+  if [[ -n "${SPCS_REDIS_IMAGE:-}" ]]; then
+    SPCS_REDIS_IMAGE="$(printf '%s' "$SPCS_REDIS_IMAGE" | to_lower)"
+  fi
+  if [[ -n "${SPCS_POSTGRES_IMAGE:-}" ]]; then
+    SPCS_POSTGRES_IMAGE="$(printf '%s' "$SPCS_POSTGRES_IMAGE" | to_lower)"
   fi
 }
 
@@ -175,9 +192,36 @@ snow_exec() {
     snowflake_home="$ROOT_DIR/.snowflake"
   fi
 
-  local -a snow_global=()
+  local -a snow_args=("$@")
   if [[ "${SNOW_DEBUG:-0}" == "1" ]]; then
-    snow_global+=(--debug)
+    # Snowflake CLI v3 does not accept `--debug` at the root command, but most leaf
+    # commands accept it after the command path (e.g. `snow sql --debug ...`,
+    # `snow stage copy --debug ...`, `snow spcs service create --debug ...`).
+    if [[ "${#snow_args[@]}" -ge 1 ]]; then
+      case "${snow_args[0]}" in
+        sql)
+          snow_args=(sql --debug "${snow_args[@]:1}")
+          ;;
+        stage)
+          if [[ "${#snow_args[@]}" -ge 2 ]]; then
+            snow_args=(stage "${snow_args[1]}" --debug "${snow_args[@]:2}")
+          else
+            snow_args=(stage --debug)
+          fi
+          ;;
+        spcs)
+          if [[ "${#snow_args[@]}" -ge 3 ]]; then
+            snow_args=(spcs "${snow_args[1]}" "${snow_args[2]}" --debug "${snow_args[@]:3}")
+          else
+            snow_args=(spcs --debug "${snow_args[@]:1}")
+          fi
+          ;;
+        *)
+          # Best-effort: append to the first command token.
+          snow_args=("${snow_args[0]}" --debug "${snow_args[@]:1}")
+          ;;
+      esac
+    fi
   fi
 
   local -a env_prefix=()
@@ -194,28 +238,28 @@ snow_exec() {
 
   # Prefer a repo-local venv snow (this also ensures we use the venv's Python, e.g. 3.11+).
   if [[ -x "$ROOT_DIR/.venv/bin/snow" ]]; then
-    "${env_prefix[@]}" "$ROOT_DIR/.venv/bin/snow" "${snow_global[@]}" "$@"
+    "${env_prefix[@]}" "$ROOT_DIR/.venv/bin/snow" "${snow_args[@]}"
     return
   fi
 
   if command -v snow >/dev/null 2>&1; then
-    "${env_prefix[@]}" snow "${snow_global[@]}" "$@"
+    "${env_prefix[@]}" snow "${snow_args[@]}"
     return
   fi
 
   # If a repo venv exists, use its interpreter for uvx so we can resolve newer snowflake-cli.
   if [[ -x "$ROOT_DIR/.venv/bin/python" ]] && command -v uvx >/dev/null 2>&1; then
-    "${env_prefix[@]}" uvx -p "$ROOT_DIR/.venv/bin/python" --from snowflake-cli snow "${snow_global[@]}" "$@"
+    "${env_prefix[@]}" uvx -p "$ROOT_DIR/.venv/bin/python" --from snowflake-cli snow "${snow_args[@]}"
     return
   fi
 
   if command -v uvx >/dev/null 2>&1; then
-    "${env_prefix[@]}" uvx --from snowflake-cli snow "${snow_global[@]}" "$@"
+    "${env_prefix[@]}" uvx --from snowflake-cli snow "${snow_args[@]}"
     return
   fi
 
   if command -v uv >/dev/null 2>&1; then
-    "${env_prefix[@]}" uv tool run --from snowflake-cli snow "${snow_global[@]}" "$@"
+    "${env_prefix[@]}" uv tool run --from snowflake-cli snow "${snow_args[@]}"
     return
   fi
 
@@ -317,6 +361,7 @@ create_secret() {
     conn+=(--connection "$SNOW_CONNECTION")
   fi
 
+  log "Creating secret ${secret_name} (len=${#secret_value})"
   local quoted
   quoted="$(printf '%s' "$secret_value" | sql_quote)"
   snow_exec sql "${conn[@]}" -q "CREATE OR REPLACE SECRET ${secret_name} TYPE=GENERIC_STRING SECRET_STRING=${quoted};"
@@ -418,6 +463,9 @@ sync_config_stage() {
 
 apply_service_spec() {
   require_env COMPUTE_POOL SERVICE_NAME SPCS_IMAGE CONFIG_STAGE
+  if [[ "${SPCS_PROFILE}" == "allinone" ]]; then
+    require_env SUPERSET_SECRET_KEY_VALUE SUPERSET_FERNET_KEY_VALUE SUPERSET_ADMINS_VALUE
+  fi
   local spec_file
   spec_file="$(pick_service_spec)"
   local rendered
@@ -505,7 +553,11 @@ deploy_all() {
   fi
   sync_config_stage
   if [[ "${RUN_BOOTSTRAP:-0}" == "1" ]]; then
-    run_job_spec "$(pick_bootstrap_spec)" "${BOOTSTRAP_JOB_NAME:-superset_bootstrap}"
+    if [[ "${SPCS_PROFILE}" == "allinone" ]]; then
+      log "Skipping bootstrap job for allinone: Postgres/Redis are inside the service; migrations run in the Superset container on startup."
+    else
+      run_job_spec "$(pick_bootstrap_spec)" "${BOOTSTRAP_JOB_NAME:-superset_bootstrap}"
+    fi
   fi
   apply_service_spec
   log "Deployment complete."
@@ -704,6 +756,9 @@ Commands:
   render-spec <file>      Print an SPCS YAML spec with env substitution
   bootstrap-snowflake     Create DB/SCHEMA/stages/image repo if missing (best-effort)
   create-secrets          Create/replace required Superset secrets in Snowflake
+  endpoints               Show public endpoint URL(s) for SERVICE_NAME
+  debug-service [id]      Print describe + logs for SERVICE_NAME (default instance id: 0)
+  drop-service            Drop the SPCS service (use --force to delete volumes)
   push-images             Login to Snowflake image registry and push images (Superset + optional deps)
   sync-config-stage       Upload superset/config/* to the configured Snowflake stage
   apply-service           Render + apply infra/spcs/service.yaml via snow CLI
@@ -715,6 +770,70 @@ Snowflake CLI config:
   - This repo supports a repo-local config at .snowflake/config.toml (auto-detected).
   - Use SNOW_CONNECTION=<name> to select a non-default connection.
 USAGE
+}
+
+service_endpoints() {
+  require_env SERVICE_NAME
+
+  local -a conn=()
+  if [[ -n "$SNOW_CONNECTION" ]]; then
+    conn+=(--connection "$SNOW_CONNECTION")
+  fi
+
+  log "Service endpoints: ${SERVICE_NAME}"
+  snow_exec spcs service list-endpoints "${conn[@]}" "${SERVICE_NAME}"
+}
+
+drop_service() {
+  require_env SERVICE_NAME
+  local force=${1:-0}
+
+  local -a conn=()
+  if [[ -n "$SNOW_CONNECTION" ]]; then
+    conn+=(--connection "$SNOW_CONNECTION")
+  fi
+
+  if [[ "$force" == "1" ]]; then
+    log "Dropping service ${SERVICE_NAME} (FORCE)"
+    snow_exec sql "${conn[@]}" -q "DROP SERVICE IF EXISTS ${SERVICE_NAME} FORCE;"
+  else
+    log "Dropping service ${SERVICE_NAME}"
+    snow_exec spcs service drop "${conn[@]}" "${SERVICE_NAME}"
+  fi
+}
+
+debug_service() {
+  require_env SERVICE_NAME
+  local instance_id=${1:-0}
+
+  local -a conn=()
+  if [[ -n "$SNOW_CONNECTION" ]]; then
+    conn+=(--connection "$SNOW_CONNECTION")
+  fi
+
+  log "Service describe: ${SERVICE_NAME}"
+  snow_exec spcs service describe "${conn[@]}" "${SERVICE_NAME}" || true
+
+  log "Service instances: ${SERVICE_NAME}"
+  snow_exec spcs service list-instances "${conn[@]}" "${SERVICE_NAME}" || true
+
+  log "Service containers: ${SERVICE_NAME}"
+  snow_exec spcs service list-containers "${conn[@]}" "${SERVICE_NAME}" || true
+
+  local c
+  for c in superset postgres redis; do
+    log "Logs (${c}) instance=${instance_id} previous"
+    snow_exec spcs service logs "${conn[@]}" "${SERVICE_NAME}" \
+      --container-name "$c" \
+      --instance-id "$instance_id" \
+      --previous-logs \
+      --num-lines 400 || true
+    log "Logs (${c}) instance=${instance_id} current"
+    snow_exec spcs service logs "${conn[@]}" "${SERVICE_NAME}" \
+      --container-name "$c" \
+      --instance-id "$instance_id" \
+      --num-lines 200 || true
+  done
 }
 
 run_local_container() {
@@ -763,6 +882,21 @@ case "$cmd" in
     ;;
   create-secrets)
     create_secrets
+    ;;
+  endpoints)
+    service_endpoints
+    ;;
+  debug-service)
+    shift || true
+    debug_service "${1:-0}"
+    ;;
+  drop-service)
+    shift || true
+    if [[ "${1:-}" == "--force" ]]; then
+      drop_service 1
+    else
+      drop_service 0
+    fi
     ;;
   push-images)
     push_images

@@ -2,18 +2,19 @@ spec:
   containers:
     - name: superset
       image: ${SPCS_IMAGE}
+      command:
+        - bash
+        - /app/scripts/spcs_allinone_start.sh
       env:
         SUPERSET_CONFIG_PATH: /config/superset_config.py
-        SUPERSET_DB_URI: postgresql+psycopg2://superset:superset@postgres:5432/superset
-        SUPERSET_REDIS_HOST: redis
+        # In SPCS, containers in the same service instance share a network namespace;
+        # use localhost instead of container names for intra-service connections.
+        SUPERSET_DB_URI: "postgresql+psycopg2://superset:superset@localhost:5432/superset"
+        SUPERSET_REDIS_HOST: localhost
         SUPERSET_REDIS_PORT: "6379"
-      secrets:
-        - snowflakeSecret: ${SECRET_SUPERSET_SECRET_KEY}
-          secretKeyRef: secret_string
-          envVarName: SUPERSET_SECRET_KEY
-        - snowflakeSecret: ${SECRET_SUPERSET_FERNET_KEY}
-          secretKeyRef: secret_string
-          envVarName: SUPERSET_FERNET_KEY
+        SUPERSET_SECRET_KEY: "${SUPERSET_SECRET_KEY_VALUE}"
+        SUPERSET_FERNET_KEY: "${SUPERSET_FERNET_KEY_VALUE}"
+        SUPERSET_BOOTSTRAP_ADMINS: "${SUPERSET_ADMINS_VALUE}"
       volumeMounts:
         - name: superset-config
           mountPath: /config
@@ -31,6 +32,9 @@ spec:
         POSTGRES_DB: superset
         POSTGRES_USER: superset
         POSTGRES_PASSWORD: superset
+        # Block volumes can be mounted as a filesystem root containing `lost+found`.
+        # Postgres refuses to initdb directly in such a directory, so use a subdir.
+        PGDATA: /var/lib/postgresql/data/pgdata
       volumeMounts:
         - name: pgdata
           mountPath: /var/lib/postgresql/data
@@ -57,10 +61,6 @@ spec:
     - name: ui
       port: 8088
       public: true
-
-  capabilities:
-    securityContext:
-      executeAsCaller: true
 
   volumes:
     - name: superset-config

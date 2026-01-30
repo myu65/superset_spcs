@@ -52,6 +52,8 @@ This repo supports two deployment profiles (set `SPCS_PROFILE` in `config/spcs.e
 - `managed` — Superset + Redis run in SPCS. Metadata DB is external (e.g. Snowflake managed Postgres) and is passed via a secret.
 - `allinone` — Superset + Redis + Postgres run in one SPCS service. Postgres data persists on a block volume.
 
+Note: For `allinone`, don't run a separate bootstrap job (jobs must exit, but Postgres/Redis are long-running). The Superset container runs `superset db upgrade/init` on startup after Postgres is reachable. The `allinone` service spec injects `SUPERSET_SECRET_KEY`/`SUPERSET_FERNET_KEY`/`SUPERSET_BOOTSTRAP_ADMINS` from `config/spcs.env` (`*_VALUE` variables).
+
 ## Automated deployment
 
 Run `./cli/spcs.sh deploy` to execute the whole pipeline in one go (it will source `config/spcs.env` automatically):
@@ -85,7 +87,6 @@ The CLI includes:
 - `./cli/spcs.sh sync-config-stage`
 - `./cli/spcs.sh apply-service`
 - `./cli/spcs.sh run-job infra/spcs/jobs/pg_restore.yaml superset-restore`
-- `infra/spcs/jobs/bootstrap_allinone.yaml` — allinone bootstrap job (runs Superset+Postgres+Redis in one job)
 
 All SPCS commands require Snowflake CLI (`snow`). If `snow` isn't installed, the CLI will try to run it via uv (`uvx --from snowflake-cli snow ...`).
 
