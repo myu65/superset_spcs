@@ -1,2 +1,36 @@
-2026-01-27 00:02:18 INFO [snowflake.cli.plugins.stage.manager] Uploading /home/myu65/superset_spcs/superset/config/__init__.py to @app_config.superset/
-2026-01-27 00:03:23 INFO [snowflake.cli.plugins.stage.manager] Uploading /home/myu65/superset_spcs/superset/config/__init__.py to @app_config.superset/
+2026-02-05 22:09:57 INFO [snowflake.cli._plugins.stage.manager] Uploading /home/myu65/superset_spcs/superset/config/__init__.py to @SUPERSET.SUPERSET.app_config_superset/
+2026-02-05 22:10:07 INFO [snowflake.cli._plugins.stage.manager] Uploading /home/myu65/superset_spcs/superset/config/sf_security.py to @SUPERSET.SUPERSET.app_config_superset/
+2026-02-05 22:10:12 INFO [snowflake.cli._plugins.stage.manager] Uploading /home/myu65/superset_spcs/superset/config/snowflake_remote_user_middleware.py to @SUPERSET.SUPERSET.app_config_superset/
+2026-02-05 22:10:17 INFO [snowflake.cli._plugins.stage.manager] Uploading /home/myu65/superset_spcs/superset/config/spcs_snowflake_engine_spec.py to @SUPERSET.SUPERSET.app_config_superset/
+2026-02-05 22:10:22 INFO [snowflake.cli._plugins.stage.manager] Uploading /home/myu65/superset_spcs/superset/config/superset_config.py to @SUPERSET.SUPERSET.app_config_superset/
+2026-02-05 22:10:27 INFO [snowflake.cli.api.secure_path] Opening file /tmp/tmp.FpAr6il4Ob in mode 'r'
+2026-02-05 22:10:27 INFO [snowflake.cli.api.secure_path] Closing file /tmp/tmp.FpAr6il4Ob
+2026-02-05 22:10:35 INFO [snowflake.cli.api.secure_path] Opening file /tmp/tmp.FpAr6il4Ob in mode 'r'
+2026-02-05 22:10:35 INFO [snowflake.cli.api.secure_path] Closing file /tmp/tmp.FpAr6il4Ob
+2026-02-05 22:41:30 INFO [snowflake.cli._plugins.stage.manager] Uploading /home/myu65/superset_spcs/superset/config/__init__.py to @SUPERSET.SUPERSET.app_config_superset/
+2026-02-05 22:41:35 INFO [snowflake.cli._plugins.stage.manager] Uploading /home/myu65/superset_spcs/superset/config/sf_security.py to @SUPERSET.SUPERSET.app_config_superset/
+2026-02-05 22:41:40 INFO [snowflake.cli._plugins.stage.manager] Uploading /home/myu65/superset_spcs/superset/config/snowflake_remote_user_middleware.py to @SUPERSET.SUPERSET.app_config_superset/
+2026-02-05 22:41:45 INFO [snowflake.cli._plugins.stage.manager] Uploading /home/myu65/superset_spcs/superset/config/spcs_snowflake_engine_spec.py to @SUPERSET.SUPERSET.app_config_superset/
+2026-02-05 22:41:50 INFO [snowflake.cli._plugins.stage.manager] Uploading /home/myu65/superset_spcs/superset/config/superset_config.py to @SUPERSET.SUPERSET.app_config_superset/
+2026-02-05 22:41:55 INFO [snowflake.cli.api.secure_path] Opening file /tmp/tmp.lSOZvq2oUs in mode 'r'
+2026-02-05 22:41:55 INFO [snowflake.cli.api.secure_path] Closing file /tmp/tmp.lSOZvq2oUs
+2026-02-05 22:41:59 INFO [snowflake.cli.api.secure_path] Opening file /tmp/tmp.lSOZvq2oUs in mode 'r'
+2026-02-05 22:41:59 INFO [snowflake.cli.api.secure_path] Closing file /tmp/tmp.lSOZvq2oUs
+2026-02-05 22:56:42 INFO [snowflake.cli._plugins.stage.manager] Uploading /home/myu65/superset_spcs/superset/config/__init__.py to @SUPERSET.SUPERSET.app_config_superset/
+2026-02-05 22:56:47 INFO [snowflake.cli._plugins.stage.manager] Uploading /home/myu65/superset_spcs/superset/config/sf_security.py to @SUPERSET.SUPERSET.app_config_superset/
+2026-02-05 22:56:51 INFO [snowflake.cli._plugins.stage.manager] Uploading /home/myu65/superset_spcs/superset/config/snowflake_remote_user_middleware.py to @SUPERSET.SUPERSET.app_config_superset/
+2026-02-05 22:56:57 INFO [snowflake.cli._plugins.stage.manager] Uploading /home/myu65/superset_spcs/superset/config/spcs_snowflake_engine_spec.py to @SUPERSET.SUPERSET.app_config_superset/
+2026-02-05 22:57:02 INFO [snowflake.cli._plugins.stage.manager] Uploading /home/myu65/superset_spcs/superset/config/superset_config.py to @SUPERSET.SUPERSET.app_config_superset/
+2026-02-05 22:57:07 INFO [snowflake.cli.api.secure_path] Opening file /tmp/tmp.2EX58baNYB in mode 'r'
+2026-02-05 22:57:07 INFO [snowflake.cli.api.secure_path] Closing file /tmp/tmp.2EX58baNYB
+2026-02-05 22:57:11 INFO [snowflake.cli.api.secure_path] Opening file /tmp/tmp.2EX58baNYB in mode 'r'
+2026-02-05 22:57:11 INFO [snowflake.cli.api.secure_path] Closing file /tmp/tmp.2EX58baNYB
+2026-02-05 22:58:49 INFO [snowflake.cli._plugins.stage.manager] Uploading /home/myu65/superset_spcs/superset/config/__init__.py to @SUPERSET.SUPERSET.app_config_superset/
+2026-02-05 22:58:54 INFO [snowflake.cli._plugins.stage.manager] Uploading /home/myu65/superset_spcs/superset/config/sf_security.py to @SUPERSET.SUPERSET.app_config_superset/
+2026-02-05 22:58:58 INFO [snowflake.cli._plugins.stage.manager] Uploading /home/myu65/superset_spcs/superset/config/snowflake_remote_user_middleware.py to @SUPERSET.SUPERSET.app_config_superset/
+2026-02-05 22:59:03 INFO [snowflake.cli._plugins.stage.manager] Uploading /home/myu65/superset_spcs/superset/config/spcs_snowflake_engine_spec.py to @SUPERSET.SUPERSET.app_config_superset/
+2026-02-05 22:59:08 INFO [snowflake.cli._plugins.stage.manager] Uploading /home/myu65/superset_spcs/superset/config/superset_config.py to @SUPERSET.SUPERSET.app_config_superset/
+2026-02-05 22:59:12 INFO [snowflake.cli.api.secure_path] Opening file /tmp/tmp.25S7TXzoNX in mode 'r'
+2026-02-05 22:59:12 INFO [snowflake.cli.api.secure_path] Closing file /tmp/tmp.25S7TXzoNX
+2026-02-05 22:59:17 INFO [snowflake.cli.api.secure_path] Opening file /tmp/tmp.25S7TXzoNX in mode 'r'
+2026-02-05 22:59:17 INFO [snowflake.cli.api.secure_path] Closing file /tmp/tmp.25S7TXzoNX

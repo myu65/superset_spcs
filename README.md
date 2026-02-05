@@ -194,8 +194,29 @@ Snowflake CLI (`snow`) は、手元に `snow` バイナリが無い場合でも 
 
 ## Superset から Snowflake に接続する (SPCS 内から)
 
-Superset が SPCS 上で動いている場合、Superset から Snowflake (および外部サービス) に接続するには **External Access Integration (EAI)** が必要です。
-EAI が未設定だと Superset の「Database 接続テスト」で `Network policy is required` のようなエラーになります。
+Superset が SPCS 上で動いている場合、Superset から外部ネットワーク（インターネット）へ接続するには **External Access Integration (EAI)** が必要です。
+Snowflake の通常の公開エンドポイントへ接続しようとすると、EAI が未設定の状態では Superset の「Database 接続テスト」で `Network policy is required` のようなエラーになります。
+
+※ Trial アカウントでは External Access が使えないため、この方法は利用できません（`External access is not supported for trial accounts.`）。
+Trial で Superset → Snowflake をやりたい場合は、SPCS が注入する OAuth トークン（`/snowflake/session/token`）で **同一アカウントへ“内側”接続**する方式を使います。
+このリポでは `superset/config/spcs_snowflake_engine_spec.py` を同梱しており、Superset の Snowflake 接続を SPCS トークン方式に差し替えます。
+
+### Trial での Superset→Snowflake 接続（SPCS トークン方式）
+
+Superset の Database 追加で Snowflake を選び、SQLAlchemy URI は「形だけ」入れてください（ユーザー/パスワード/ホストは実際には使いません）。
+Warehouse/Role/Schema だけ URI クエリで指定するのが簡単です。
+
+例:
+
+```
+snowflake://x:y@ignored/ANALYTICS/PUBLIC?warehouse=SNOWFLAKE_LEARNING_WH&role=SYSADMIN
+```
+
+`@ignored`（ホスト）や `x:y`（ユーザー/パスワード）は **形だけ**で、実際の接続には使いません。SPCS が注入する `SNOWFLAKE_HOST` / `SNOWFLAKE_ACCOUNT` と `/snowflake/session/token` を使って接続します。
+
+もし Superset のログに `ignored.snowflakecomputing.com` が出る場合は、差し替えが反映されていません（設定ファイルの再アップロードやサービス再起動が必要です）。まず `./cli/spcs.sh sync-config-stage` → `./cli/spcs.sh apply-service` を実行して、サービスを更新してください。
+
+デバッグしたい場合は、サービスの環境変数に `SPCS_SNOWFLAKE_DEBUG=1` を追加すると、Superset ログに「どの host/account を使っているか（トークンは長さのみ）」を出します。
 
 ### 権限について（重要）
 

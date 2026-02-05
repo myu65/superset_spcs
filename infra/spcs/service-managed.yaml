@@ -4,6 +4,8 @@ spec:
       image: ${SPCS_IMAGE}
       env:
         SUPERSET_CONFIG_PATH: /config/superset_config.py
+        # Used to force a restart on `apply-service` so stage-mounted config updates take effect.
+        SPCS_SPEC_APPLIED_AT: "${SPCS_SPEC_APPLIED_AT}"
         SUPERSET_REDIS_HOST: redis
         SUPERSET_REDIS_PORT: "6379"
       secrets:

@@ -7,6 +7,8 @@ spec:
         - /app/scripts/spcs_allinone_start.sh
       env:
         SUPERSET_CONFIG_PATH: /config/superset_config.py
+        # Used to force a restart on `apply-service` so stage-mounted config updates take effect.
+        SPCS_SPEC_APPLIED_AT: "${SPCS_SPEC_APPLIED_AT}"
         # In SPCS, containers in the same service instance share a network namespace;
         # use localhost instead of container names for intra-service connections.
         SUPERSET_DB_URI: "postgresql+psycopg2://superset:superset@localhost:5432/superset"

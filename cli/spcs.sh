@@ -466,6 +466,8 @@ apply_service_spec() {
   if [[ "${SPCS_PROFILE}" == "allinone" ]]; then
     require_env SUPERSET_SECRET_KEY_VALUE SUPERSET_FERNET_KEY_VALUE SUPERSET_ADMINS_VALUE
   fi
+  export SPCS_SPEC_APPLIED_AT
+  SPCS_SPEC_APPLIED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   local spec_file
   spec_file="$(pick_service_spec)"
   local rendered

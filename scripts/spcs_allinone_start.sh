@@ -30,6 +30,16 @@ log "Superset: $(superset --version 2>/dev/null || true)"
 log "Scripts in /app/scripts:"
 ls -la /app/scripts 2>/dev/null || true
 
+token_path="${SNOWFLAKE_SERVICE_TOKEN_PATH:-/snowflake/session/token}"
+if [[ -f "$token_path" ]]; then
+  token_len="$(wc -c <"$token_path" 2>/dev/null || true)"
+  log "SPCS token file: ${token_path} (bytes=${token_len:-?})"
+else
+  log "SPCS token file missing: ${token_path}"
+fi
+log "SNOWFLAKE_HOST=${SNOWFLAKE_HOST-<unset>}"
+log "SNOWFLAKE_ACCOUNT=${SNOWFLAKE_ACCOUNT-<unset>}"
+
 parse_host_port_from_uri() {
   local uri=$1
   local rest hostport host port
